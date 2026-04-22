@@ -8,33 +8,17 @@ export interface GeneratedCard {
 }
 
 function parseJSON(text: string): { cards: GeneratedCard[] } {
-  // Try to find a JSON block using regex if it's wrapped in markdown
-  const jsonBlockMatch = text.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+  const cleaned = text
+    .trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '');
 
-  if (jsonBlockMatch && jsonBlockMatch[1]) {
-    return JSON.parse(jsonBlockMatch[1]);
-  }
-
-  // Fallback: try finding the first { and last }
-  const startIdx = text.indexOf('{');
-  const endIdx = text.lastIndexOf('}');
-
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const jsonStr = text.substring(startIdx, endIdx + 1);
-    try {
-      return JSON.parse(jsonStr);
-    } catch (e) {
-      console.error('Failed to parse extracted JSON:', jsonStr);
-      throw new Error('Failed to parse JSON from AI response');
-    }
-  }
-
-  // Direct parse as a last resort
   try {
-    return JSON.parse(text);
-  } catch (e) {
-    console.error('Failed to parse direct text as JSON:', text);
-    throw new Error('AI response was not valid JSON');
+    return JSON.parse(cleaned);
+  } catch {
+    console.error('Failed to parse JSON from AI response:', cleaned);
+    throw new Error('Failed to parse JSON from AI response');
   }
 }
 
@@ -52,16 +36,12 @@ FLASHCARD RULES:
 Ensure Questions:
 - Are short, direct, and student-friendly
 - Ask WHY and HOW
-- Avoid verbosity (e.g., Use "How does the discriminant decide roots?" instead of "Explain how the value of the discriminant...")
+- Avoid verbosity
 
 Ensure Answers:
 - Are CRISP and extremely short
 - Maximum 2-3 lines
 - Use bullet points instead of paragraphs
-- Example: 
-  - Positive => 2 roots
-  - Zero => 1 root
-  - Negative => 0 roots
 
 Application Questions:
 - Keep to 1-step reasoning
@@ -74,25 +54,23 @@ Force output to include:
 - 1 relationship
 - max 2 definitions
 
-Examples of high-value cards:
-- Why must a ≠ 0 in a quadratic equation?
-- Why does a negative discriminant give no real roots?
-- Can a quadratic equation have exactly one root? When?
-- What mistake happens if we treat a = 0 as quadratic?
-- Explain how factorization gives roots 2 and 3 for x^2 - 5x + 6 = 0
-
 Filter low quality cards:
 - Remove cards that are too obvious
 - Remove cards that copy text directly
 - Remove cards that add no learning value
 
-Respond ONLY with a JSON object in the following format, with no markdown formatting or other text:
+Return ONLY valid JSON.
+Do not wrap the response in markdown.
+Do not add any text before or after the JSON.
+Do not use unescaped double quotes inside string values.
+
+Return exactly this shape:
 {
   "cards": [
     {
       "question": "Question text",
       "answer": "Answer text",
-      "type": "Concept|Definition|Relationship|Example",
+      "type": "Concept|Definition|Relationship|Application",
       "topic": "Main topic keyword"
     }
   ]
@@ -103,12 +81,16 @@ ${text}
   `.trim();
 
   try {
-    const result = await geminiModel.generateContent(prompt);
+    const result = await geminiModel.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+      },
+    });
 
-    const response = await result.response;
-    const content = response.text();
+    const content = result.response.text();
 
-    console.log("Gemini response:", content);
+    console.log('Gemini response:', content);
 
     if (!content) {
       throw new Error('No content returned from Gemini');
@@ -120,11 +102,11 @@ ${text}
       throw new Error('Parsed JSON does not contain a "cards" array');
     }
 
-    // Clean up markdown backticks from final text
-    return parsed.cards.map(card => ({
-      ...card,
-      question: card.question.replace(/\`/g, ""),
-      answer: card.answer.replace(/\`/g, "")
+    return parsed.cards.map((card) => ({
+      question: String(card.question || '').replace(/\`/g, '').trim(),
+      answer: String(card.answer || '').replace(/\`/g, '').trim(),
+      type: String(card.type || '').trim(),
+      topic: String(card.topic || '').trim(),
     }));
   } catch (error) {
     console.error('Error generating cards with Gemini:', error);
